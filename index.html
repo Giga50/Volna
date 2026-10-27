@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Волна — музыкальный центр</title>
+<style>
+:root{--bg:#0f1220;--card:#1a1f36;--ac:#5eead4;--tx:#e8ebff;--mu:#8a90b5}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,sans-serif;background:var(--bg);color:var(--tx);padding:16px 16px 130px;max-width:720px;margin:auto}
+h1{margin:8px 0 16px;color:var(--ac)}
+.card{background:var(--card);border-radius:14px;padding:14px;margin-bottom:14px}
+input,button{font:inherit;border-radius:10px;border:0;padding:10px;margin:4px 0}
+input{width:100%;background:#0f1220;color:var(--tx)}
+button{background:var(--ac);color:#06201c;font-weight:600;cursor:pointer}
+button.g{background:transparent;color:var(--mu)}
+.row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #262c4a}
+.row:last-child{border:0}
+.row .t{flex:1;min-width:0;cursor:pointer}
+.row .t b,.row .t small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row.on b{color:var(--ac)}
+small{color:var(--mu)}
+#bar{position:fixed;left:0;right:0;bottom:0;background:#141831;padding:12px 16px calc(12px + env(safe-area-inset-bottom,0px));border-top:1px solid #262c4a}
+#bar .in{max-width:720px;margin:auto}
+#bar input[type=range]{padding:0;margin:6px 0}
+.ctl{display:flex;justify-content:center;gap:14px}
+.ctl button{width:48px;height:48px;border-radius:50%;padding:0;font-size:18px}
+</style>
+</head>
+<body>
+<h1>🌊 Волна</h1>
+
+<div class="card" id="auth"></div>
+<div class="card" id="up" hidden>
+  <b>Загрузить трек</b>
+  <input id="title" placeholder="Название">
+  <input id="artist" placeholder="Исполнитель">
+  <input id="file" type="file" accept="audio/*">
+  <button id="upbtn">Загрузить</button>
+  <small id="msg"></small>
+</div>
+<div class="card" id="list"></div>
+
+<div id="bar"><div class="in">
+  <div id="now"><small>Выберите трек</small></div>
+  <input id="seek" type="range" min="0" max="100" value="0">
+  <div class="ctl">
+    <button id="prev">⏮</button><button id="play">▶</button><button id="next">⏭</button>
+  </div>
+</div></div>
+<audio id="au"></audio>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script>
+// ВСТАВЬТЕ СВОИ ДАННЫЕ из Supabase: Project Settings → API
+const SUPABASE_URL = 'https://YOUR-PROJECT.supabase.co';
+const SUPABASE_KEY = 'YOUR-ANON-KEY';
+
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const $ = id => document.getElementById(id);
+const au = $('au');
+let user = null, tracks = [], idx = -1;
+
+const urlOf = p => sb.storage.from('tracks').getPublicUrl(p).data.publicUrl;
+
+function renderAuth() {
+  const box = $('auth'); box.innerHTML = '';
+  if (user) {
+    const s = document.createElement('small'); s.textContent = user.email;
+    const b = document.createElement('button'); b.className = 'g'; b.textContent = 'Выйти';
+    b.onclick = () => sb.auth.signOut();
+    box.append(s, b);
+  } else {
+    box.innerHTML = '<input id="em" type="email" placeholder="Email"><input id="pw" type="password" placeholder="Пароль (от 6 символов)"><button id="li">Войти</button> <button id="su" class="g">Регистрация</button><br><small id="am"></small>';
+    $('li').onclick = async () => { const {error} = await sb.auth.signInWithPassword({email: $('em').value, password: $('pw').value}); if (error) $('am').textContent = error.message; };
+    $('su').onclick = async () => { const {error} = await sb.auth.signUp({email: $('em').value, password: $('pw').value}); $('am').textContent = error ? error.message : 'Готово! Проверьте почту, если включено подтверждение.'; };
+  }
+  $('up').hidden = !user;
+}
+
+function renderList() {
+  const box = $('list'); box.innerHTML = '';
+  if (!tracks.length) { box.innerHTML = '<small>Пока нет треков</small>'; return; }
+  tracks.forEach((t, i) => {
+    const r = document.createElement('div'); r.className = 'row' + (i === idx ? ' on' : '');
+    const d = document.createElement('div'); d.className = 't';
+    const b = document.createElement('b'); b.textContent = t.title;
+    const s = document.createElement('small'); s.textContent = t.artist || 'Неизвестный исполнитель';
+    d.append(b, s); d.onclick = () => playAt(i); r.append(d);
+    if (user && t.user_id === user.id) {
+      const x = document.createElement('button'); x.className = 'g'; x.textContent = '✕';
+      x.onclick = async () => {
+        await sb.storage.from('tracks').remove([t.file_path]);
+        await sb.from('tracks').delete().eq('id', t.id);
+        load();
+      };
+      r.append(x);
+    }
+    box.append(r);
+  });
+}
+
+async function load() {
+  const {data} = await sb.from('tracks').select('*').order('created_at', {ascending: false});
+  tracks = data || [];
+  renderList();
+}
+
+function playAt(i) {
+  if (i < 0 || i >= tracks.length) return;
+  idx = i; const t = tracks[i];
+  au.src = urlOf(t.file_path); au.play();
+  $('now').innerHTML = ''; const b = document.createElement('b'); b.textContent = t.title;
+  const s = document.createElement('small'); s.textContent = ' — ' + (t.artist || '');
+  $('now').append(b, s); renderList();
+}
+
+$('play').onclick = () => { if (idx < 0) return playAt(0); au.paused ? au.play() : au.pause(); };
+$('next').onclick = () => playAt((idx + 1) % tracks.length);
+$('prev').onclick = () => playAt((idx - 1 + tracks.length) % tracks.length);
+au.onplay = () => $('play').textContent = '⏸';
+au.onpause = () => $('play').textContent = '▶';
+au.onended = () => $('next').click();
+au.ontimeupdate = () => { if (au.duration) $('seek').value = au.currentTime / au.duration * 100; };
+$('seek').oninput = e => { if (au.duration) au.currentTime = e.target.value / 100 * au.duration; };
+
+$('upbtn').onclick = async () => {
+  const f = $('file').files[0]; if (!f) { $('msg').textContent = 'Выберите файл'; return; }
+  $('msg').textContent = 'Загрузка…';
+  const path = user.id + '/' + Date.now() + '-' + f.name.replace(/[^\w.\-]/g, '_');
+  const up = await sb.storage.from('tracks').upload(path, f);
+  if (up.error) { $('msg').textContent = up.error.message; return; }
+  const ins = await sb.from('tracks').insert({title: $('title').value || f.name, artist: $('artist').value, file_path: path, user_id: user.id});
+  $('msg').textContent = ins.error ? ins.error.message : 'Готово!';
+  if (!ins.error) { $('title').value = ''; $('artist').value = ''; $('file').value = ''; load(); }
+};
+
+sb.auth.onAuthStateChange((_e, session) => { user = session ? session.user : null; renderAuth(); renderList(); });
+sb.auth.getSession().then(({data}) => { user = data.session ? data.session.user : null; renderAuth(); });
+load();
+</script>
+</body>
+</html>
